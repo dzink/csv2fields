@@ -1,0 +1,4 @@
+name = CSV to Fields Importer
+description = "Imports fields from a CSV"
+package = Fields
+core = 7.x

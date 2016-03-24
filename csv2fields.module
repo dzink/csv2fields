@@ -1,0 +1,275 @@
+<?php
+
+
+/**
+ * Implements hook_csv2fields_field_alter().
+ * A bunch of data massages for GGHH.
+ */
+function _csv2fields_field_init(&$field, $map) {
+  $field_data = $field['data'];
+  // Massage field name
+  _csv2fields_validate_field(&$field);
+  $field['field_name'] = strtolower($field['field_name']);
+  $field['field_name'] = preg_replace('@[^a-z0-9_]+@', '_', $field['field_name']);
+
+  if ($field['type'] == 'list_integer' || $field['type'] == 'list_text') {
+    $options = str_getcsv($field_data[$map['options']]);
+    $options = array_combine($options, $options);
+    $field['settings']['allowed_values'] = $options;
+    $field['settings']['allowed_values_function'] = '';
+  }
+}
+
+/**
+ * Creates a unique field name for a field.
+ * @param $field
+ */
+function _csv2fields_validate_field(&$field, $map) {
+  // ensure that
+  // get unique name
+
+  drupal_alter('csv2fields_validate_field', $field, $map);
+}
+
+function _csv2fields_uniquify_machine_name($field, $fields, $n = NULL) {
+  // Get unique name both within the import mapping  
+  if (is_null($n)) {
+    // set to -1 so that first iteration is _0
+    $n = -1;
+    $unique_suffix = '';
+  } else {
+    $unique_suffix = '_' . strval($n);
+  }
+  // Get a 32-char long unique name
+  $temp_machine_name = substr($field['field_name'], 0, 32 - strlen($unique_suffix)) . $unique_suffix;
+
+  // Don't use field_info_field_map() because it caches. We want to capture if
+  // an import uses the same field twice
+  $field_info = new FieldInfo();
+
+}
+
+/**
+ * Creates a unique field name for a field.
+ * @param $field
+ */
+function _csv2fields_validate_field_instance(&$field, $map) {
+  drupal_alter('csv2fields_validate_field_instance', $field, $map);
+}
+
+/**
+ * Implements hook_csv2fields_instance_alter().
+ * A bunch of massages for GGHH.
+ */
+function _csv2fields_field_instance_init(&$field_instance, $map) {
+  if (!empty($field_data[$map['prefix']])) {
+    $field_instance['settings']['prefix'] = $field_data[$map['prefix']];
+  }
+  if (!empty($field_data[$map['suffix']])) {
+    $field_instance['settings']['suffix'] = $field_data[$map['suffix']];
+  }
+  $field_instance['required'] = ($field_instance['data'][$map['required']] == 'Yes');
+  if ($field_instance['type'] == 'list_integer' || $field_instance['type'] == 'list_text') {
+    $field['settings']['widget']['type'] = 'options_buttons';
+  }
+}
+
+function csv2fields_declare_mapping_column() {
+  return array(
+    'machine_name',
+    'type',
+    'label',
+    'description',
+    'required',
+    'options',
+    'prefix',
+    'suffix',
+    'required',
+  );
+}
+
+function _csv2fields_initialize_mapping($header_row) {
+  $header_row = array_flip($header_row);
+  $cols_for_mapping = module_invoke_all('declare_mapping_column');
+  foreach ($cols_for_mapping as $col_name) {
+    if (!isset($header_row[$col_name])) {
+      $header_row[$col_name] = -1;
+    }
+  }
+  return $header_row;
+}
+
+/**
+ * Gets valid lines from the csv. Currently just checks to see if there is a
+ *   field type.
+ * @param $csv - The path to a csv to read
+ * @param $subset - The subset string from cli options. Should look something
+ *   like '138:187'.
+ * @return array
+ */
+function _csv2fields_get_csv_lines($csv, $header_row = 1, $subset = '') {
+  $fields = array();
+  $row = 1;
+  if (!empty($subset)) {
+    $subset = explode(':', $subset);
+    $start_line = $subset[0];
+    $end_line = $subset[1];
+  }
+  if (($handle = fopen($csv, "r")) !== FALSE) {
+    while (($data = fgetcsv($handle, 1000, ",")) !== FALSE) {
+      if ($row == $header_row) {
+        $fields['header_row'] = $data;
+      }
+      if (($row >= $start_line && $row <= $end_line) || empty($subset)) {
+        $fields[] = $data;
+      }
+      $row++;
+    }
+    fclose($handle);
+  }
+  return $fields;
+}
+
+/**
+ * Adds a field if it doesn't already exist.
+ * @param $field_data - The array of data from the csv.
+ * @param $all_fields - The list of all fields (gotten from field_info_field_map()).
+ * @return array - The newly built field.
+ * @throws \Exception
+ * @throws \FieldException
+ */
+function _csv2fields_add_field($field_data, $all_fields, $map) {
+  $field = array(
+    'field_name' => $field_data[$map['machine_name']],
+    'type' => $field_data[$map['type']],
+    'data' => $field_data,
+  );
+  drupal_alter('csv2fields_field', $field, $map);
+  if (!_csv2fields_check_field_exists($all_fields, $field['field_name']) && $field['type'] != 'fieldset') {
+    $field = field_create_field($field);
+  }
+  return $field;
+}
+
+/**
+ * Adds a field instance or field group to the entity if it isn't already there.
+ * @param $field - The field (without an instance).
+ * @param $field_data - The array of data from the csv.
+ * @param $all_fields - The list of all fields (gotten from field_info_field_map()).
+ * @param $entity_type - The entity type.
+ * @param $bundle - The bundle name.
+ * @param $row_number - The row number from the csv, used for applying a weight
+ *   to each field instance.
+ * @throws \FieldException
+ */
+function _csv2fields_add_to_entity($field, $field_data, $all_fields, $map, $entity_type, $bundle, $row_number) {
+  $field_instance = array(
+    'field_name' => $field['field_name'],
+    'entity_type' => $entity_type,
+    'bundle' => $bundle,
+    'type' => $field_data[$map['type']],
+    'description' => $field_data[$map['description']],
+    'label' => $field_data[$map['label']],
+    'required' => $field_data[$map['required']],
+    'widget' => array('weight' => $row_number,),
+    'display' => array(),
+    'field_group' => strtolower($field_data[$map['field_group']]),
+    'data' => $field_data,
+  );
+
+  drupal_alter('csv2fields_instance', $field_instance, $map);
+
+  // @TODO - fieldgroups are not technically field instances. Either break this
+  //    out, or rename the $field_instance variable.
+  if ($field_instance['type'] == 'fieldset') {
+    _csv2fields_add_group($field_instance);
+  }
+  elseif (!_csv2fields_check_instance_exists($all_fields, $field_instance['field_name'], $entity_type, $bundle)) {
+    unset($field_instance['data']);
+    $field_instance = field_create_instance($field_instance);
+    if ($field_instance['type'] == 'list_integer' || $field_instance['type'] == 'list_text') {
+      // @TODO: Add in options-button
+    }
+  }
+  if (!empty($field_instance['field_group'])) {
+    _csv2fields_add_field_to_group($field_instance);
+  }
+}
+
+/**
+ * @param $all_fields - The list of all fields (gotten from field_info_field_map()).
+ * @param $field_name - The name of the field.
+ * @return bool - Returns whether the field exists in $all_fields.
+ */
+function _csv2fields_check_field_exists($all_fields, $field_name) {
+  return !empty($all_fields[$field_name]);
+}
+
+/**
+ * @param $all_fields - The list of all fields (gotten from field_info_field_map()).
+ * @param $field_name - The machine name of the field.
+ * @param $entity_type - The name of the entity type.
+ * @param $bundle - The name of the bundle.
+ * @return bool - Whether the field already exists on the given bundle.
+ */
+function _csv2fields_check_instance_exists($all_fields, $field_name, $entity_type, $bundle) {
+  $exists = (_csv2fields_check_field_exists($all_fields, $field['field_name']) &&
+    !empty($all_fields[$field_name]['bundles'][$entity_type]) &&
+    in_array($bundle, $all_fields[$field_name]['bundles'][$entity_type]));
+  return $exists;
+}
+
+
+
+/**
+ * @param $group_instance - The group to create. All info about the entity
+ *    and bundle should be in this variable.
+ */
+function _csv2fields_add_group($group_instance) {
+  $group = (object) array(
+    'identifier' => dt('@fieldName|@type|@bundle|form', array(
+      '@fieldName' => $group_instance['field_name'],
+      '@type' => $group_instance['entity_type'],
+      '@bundle' => $group_instance['bundle'],
+    )),
+    'group_name' => dt('@fieldName', array(
+      '@fieldName' => $group_instance['field_name'],
+    )),
+    'entity_type' => $group_instance['entity_type'],
+    'bundle' => $group_instance['bundle'],
+    'mode' => 'form',
+    'label' => $group_instance['label'],
+    'children' => array(),
+    'weight' => $group_instance['widget']['weight'],
+    'format_type' => 'fieldset',
+    'format_settings' => array(
+      'formatter' => 'collapsible',
+      'instance_settings' => array(
+        'description' => '',
+        'classes' => '',
+        'required_fields' => 1,
+      ),
+    ),
+  );
+  field_group_group_save($group);
+  ctools_include('export');
+  ctools_export_crud_enable('field_group', $group->identifier);
+}
+
+/**
+ * @param $field_instance - A field instance to add to a group. All of the data
+ *    about the parent group gets added here, the field instance is added, and
+ *    then the group is saved.
+ */
+function _csv2fields_add_field_to_group($field_instance) {
+  $groups = field_group_read_groups(array(
+    'entity_type' => $field_instance['entity_type'],
+    'bundle'      => $field_instance['bundle'],
+    'view_mode'   => 'full'
+  ));
+  $group = $groups[$field_instance['entity_type']][$field_instance['bundle']]['form'][$field_instance['field_group']];
+  if (!empty($group)) {
+    $group->children[] = $field_instance['field_name'];
+    field_group_group_save($group);
+  }
+}
