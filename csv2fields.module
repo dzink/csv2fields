@@ -266,7 +266,11 @@ function csv2fields_csv2fields_field_instance_label_alter(&$final_field_data, &$
 function csv2fields_csv2fields_field_instance_default_value_alter(&$final_field_data, &$field_data) {
   // We can use truthy values here since 0, '', and FALSE are the defaults anyway.
   if (!empty($field_data['default_value'])) {
-    $final_field_data['default_value'][0]['value'] = $field_data['default_value'];
+    $values = str_getcsv($field_data['default_value']);
+    $values = array_map(function($value) {
+      return array('value' => $value);
+    }, $values);
+    $final_field_data['default_value'] = $values;
   }
 }
 
