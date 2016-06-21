@@ -53,11 +53,17 @@ function csv2fields_initialize_field($field_data, $headers) {
   }
   drupal_alter('csv2fields_field_base', $final_field_data, $field_data);
 
-  if (!isset($headers['field_name']) || !$final_field_data['field_name']) {
+  // If neither a field_name or type are set, this is probably not a legitimate
+  // attempt at importing a field - more likely an empty line.
+  if (!$final_field_data['field_name'] && !$final_field_data['type']) {
+    return FALSE;
+  }
+
+  if (!$final_field_data['field_name']) {
     $final_field_data['errors'][] = dt('Missing field_name');
   }
 
-  if (!isset($headers['type']) || !$final_field_data['type']) {
+  if (!$final_field_data['type']) {
     $final_field_data['errors'][] = dt('Missing type');
   }
 
