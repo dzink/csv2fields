@@ -1,96 +1,15 @@
 <?php
 
-
-/**
- * Implements hook_csv2fields_field_alter().
- * A bunch of data massages for GGHH.
- */
-function _csv2fields_field_init(&$field, $map) {
-  $field_data = $field['data'];
-  // Massage field name
-  _csv2fields_validate_field(&$field);
-  $field['field_name'] = strtolower($field['field_name']);
-  $field['field_name'] = preg_replace('@[^a-z0-9_]+@', '_', $field['field_name']);
-
-  if ($field['type'] == 'list_integer' || $field['type'] == 'list_text') {
-    $options = str_getcsv($field_data[$map['options']]);
-    $options = array_combine($options, $options);
-    $field['settings']['allowed_values'] = $options;
-    $field['settings']['allowed_values_function'] = '';
-  }
+function csv2fields_form_node_form_alter(&$form, &$form_state) {
+  dsm($form);
+  dsm(field_info_field('field_3'));
+  dsm(field_info_instance('node', 'field_3', 'page'));
 }
 
-/**
- * Creates a unique field name for a field.
- * @param $field
- */
-function _csv2fields_validate_field(&$field, $map) {
-  // ensure that
-  // get unique name
-
-  drupal_alter('csv2fields_validate_field', $field, $map);
-}
-
-function _csv2fields_uniquify_machine_name($field, $fields, $n = NULL) {
-  // Get unique name both within the import mapping  
-  if (is_null($n)) {
-    // set to -1 so that first iteration is _0
-    $n = -1;
-    $unique_suffix = '';
-  } else {
-    $unique_suffix = '_' . strval($n);
-  }
-  // Get a 32-char long unique name
-  $temp_machine_name = substr($field['field_name'], 0, 32 - strlen($unique_suffix)) . $unique_suffix;
-
-  // Don't use field_info_field_map() because it caches. We want to capture if
-  // an import uses the same field twice
-  $field_info = new FieldInfo();
-
-}
-
-/**
- * Creates a unique field name for a field.
- * @param $field
- */
-function _csv2fields_validate_field_instance(&$field, $map) {
-  drupal_alter('csv2fields_validate_field_instance', $field, $map);
-}
-
-/**
- * Implements hook_csv2fields_instance_alter().
- * A bunch of massages for GGHH.
- */
-function _csv2fields_field_instance_init(&$field_instance, $map) {
-  if (!empty($field_data[$map['prefix']])) {
-    $field_instance['settings']['prefix'] = $field_data[$map['prefix']];
-  }
-  if (!empty($field_data[$map['suffix']])) {
-    $field_instance['settings']['suffix'] = $field_data[$map['suffix']];
-  }
-  $field_instance['required'] = ($field_instance['data'][$map['required']] == 'Yes');
-  if ($field_instance['type'] == 'list_integer' || $field_instance['type'] == 'list_text') {
-    $field['settings']['widget']['type'] = 'options_buttons';
-  }
-}
-
-function csv2fields_declare_mapping_column() {
-  return array(
-    'machine_name',
-    'type',
-    'label',
-    'description',
-    'required',
-    'options',
-    'prefix',
-    'suffix',
-    'required',
-  );
-}
 
 function _csv2fields_initialize_mapping($header_row) {
   $header_row = array_flip($header_row);
-  $cols_for_mapping = module_invoke_all('declare_mapping_column');
+  $cols_for_mapping = module_invoke_all('csv2fields_declare_mapping_column');
   foreach ($cols_for_mapping as $col_name) {
     if (!isset($header_row[$col_name])) {
       $header_row[$col_name] = -1;
@@ -100,14 +19,13 @@ function _csv2fields_initialize_mapping($header_row) {
 }
 
 /**
- * Gets valid lines from the csv. Currently just checks to see if there is a
- *   field type.
+ * Gets lines from the csv.
  * @param $csv - The path to a csv to read
  * @param $subset - The subset string from cli options. Should look something
  *   like '138:187'.
  * @return array
  */
-function _csv2fields_get_csv_lines($csv, $header_row = 1, $subset = '') {
+function _csv2fields_get_csv_lines(&$csv, $header_row = 1, $subset = '') {
   $fields = array();
   $row = 1;
   if (!empty($subset)) {
@@ -120,7 +38,7 @@ function _csv2fields_get_csv_lines($csv, $header_row = 1, $subset = '') {
       if ($row == $header_row) {
         $fields['header_row'] = $data;
       }
-      if (($row >= $start_line && $row <= $end_line) || empty($subset)) {
+      elseif (($row >= $start_line && $row <= $end_line) || empty($subset)) {
         $fields[] = $data;
       }
       $row++;
@@ -261,15 +179,241 @@ function _csv2fields_add_group($group_instance) {
  *    about the parent group gets added here, the field instance is added, and
  *    then the group is saved.
  */
-function _csv2fields_add_field_to_group($field_instance) {
+function csv2fields_add_field_to_group($field_name, $field_group, $entity_type, $bundle) {
   $groups = field_group_read_groups(array(
-    'entity_type' => $field_instance['entity_type'],
-    'bundle'      => $field_instance['bundle'],
-    'view_mode'   => 'full'
+    'entity_type' => $entity_type,
+    'bundle'      => $bundle,
+    'view_mode'   => 'full',
   ));
-  $group = $groups[$field_instance['entity_type']][$field_instance['bundle']]['form'][$field_instance['field_group']];
+  $group = $groups[$entity_type][$bundle]['form'][$field_group];
   if (!empty($group)) {
-    $group->children[] = $field_instance['field_name'];
+    $group->children[] = $field_name;
     field_group_group_save($group);
   }
+}
+
+function csv2fields_get_data($field_data, $headers) {
+  $final_field_data = array();
+  foreach ($headers as $property_name => $index) {
+    $final_field_data[$property_name] = $field_data[$index];
+  }
+  return $final_field_data;
+}
+
+function csv2fields_initialize_field($field_data, $entity_type, $headers) {
+  $final_field_data = array();
+  foreach (array_keys($headers) as $field_property_name) {
+    drupal_alter('csv2fields_field_base_' . $field_property_name, $final_field_data, $field_data);
+  }
+  drupal_alter('csv2fields_field_base', $final_field_data, $field_data);
+
+  if (!isset($headers['field_name']) || !$final_field_data['field_name']) {
+    $final_field_data['errors'][] = dt('Missing field_name');
+  }
+
+  if (!isset($headers['type']) || !$final_field_data['type']) {
+    $final_field_data['errors'][] = dt('Missing type');
+  }
+
+  if (isset($final_field_data['errors']) && sizeof($final_field_data['errors'])) {
+    foreach ($final_field_data['errors'] as $error) {
+      drush_log(dt('@error on row @row_number', array(
+        '@row_number' => $field_data['row_number'],
+        '@error' => $error,
+      )), 'error');
+    }
+    return FALSE;
+  }
+  else {
+    $field = field_info_field($final_field_data['field_name']);
+    if ($field) {
+      return $field;
+    }
+    return field_create_field($final_field_data);
+  }
+}
+
+function csv2fields_initialize_instance($field_data, $entity_type, $bundle, $field_name, $headers) {
+  $final_field_data = array(
+    'entity_type' => $entity_type,
+    'bundle' => $bundle,
+    'field_name' => $field_name,
+  );
+  foreach (array_keys($headers) as $field_property_name) {
+    drupal_alter('csv2fields_field_instance_' . $field_property_name, $final_field_data, $field_data);
+  }
+  drupal_alter('csv2fields_field_instance', $final_field_data, $field_data);
+  if (isset($final_field_data['errors']) && sizeof($final_field_data['errors'])) {
+    foreach ($final_field_data['errors'] as $error) {
+      drush_log(dt('@error on row @row_number', array(
+        '@row_number' => $field_data['row_number'],
+        '@error' => $error,
+      )), 'error');
+    }
+    return FALSE;
+  }
+  else {
+    return field_create_instance($final_field_data);
+  }
+}
+
+function csv2fields_initialize_group($group_data, $entity_type, $bundle, $group_name, $headers) {
+  $final_group_data = array(
+    'entity_type' => $entity_type,
+    'bundle' => $bundle,
+    'field_name' => $group_name,
+  );
+  foreach (array_keys($headers) as $group_property_name) {
+    drupal_alter('csv2fields_group_' . $group_property_name, $final_group_data, $group_data);
+  }
+  drupal_alter('csv2fields_group', $final_group_data, $group_data);
+  if (isset($final_group_data['errors']) && sizeof($final_group_data['errors'])) {
+    foreach ($final_group_data['errors'] as $error) {
+      drush_log(dt('@error on row @row_number', array(
+        '@row_number' => $group_data['row_number'],
+        '@error' => $error,
+      )), 'error');
+    }
+    return FALSE;
+  }
+  else {
+    $group = (object) array(
+      'identifier' => dt('@fieldName|@type|@bundle|form', array(
+        '@fieldName' => $group_name,
+        '@type' => $entity_type,
+        '@bundle' => $bundle,
+      )),
+      'group_name' => $group_name,
+      'entity_type' => $entity_type,
+      'bundle' => $bundle,
+      'mode' => 'form',
+      'label' => $final_group_data['label'],
+      'children' => array(),
+      'weight' => $final_group_data['widget']['weight'],
+      'format_type' => 'fieldset',
+      'format_settings' => array(
+        'formatter' => 'collapsible',
+        'instance_settings' => array(
+          'description' => '',
+          'classes' => '',
+          'required_fields' => 1,
+        ),
+      ),
+    );
+    field_group_group_save($group);
+    ctools_include('export');
+    ctools_export_crud_enable('field_group', $group->identifier);
+  }
+}
+
+/**
+ * Implements hook_csv2fields_field_base_*_alter().
+ */
+function csv2fields_csv2fields_field_base_field_name_alter(&$final_field_data, &$field_data) {
+  $field_name = $field_data['field_name'];
+  $field_name = str_replace(' ', '_', strtolower($field_name));
+  $final_field_data['field_name'] = $field_name;
+}
+
+/**
+ * Implements hook_csv2fields_field_base_*_alter().
+ */
+function csv2fields_csv2fields_field_base_type_alter(&$final_field_data, &$field_data) {
+  $final_field_data['type'] = $field_data['type'];
+}
+
+/**
+ * Implements hook_csv2fields_field_base_*_alter().
+ */
+function csv2fields_csv2fields_field_base_cardinality_alter(&$final_field_data, &$field_data) {
+  if (!isset($field_data['cardinality'])) {
+    return 1;
+  }
+  if (intval($field_data['cardinality'])) {
+    $final_field_data['cardinality'] = $field_data['cardinality'];
+  }
+  elseif (strtolower(substr($field_data['cardinality'], 0, 3)) == 'inf'){
+    $final_field_data['cardinality'] = -1;
+  }
+  else {
+    $final_field_data['cardinality'] = 1;
+  }
+}
+
+/**
+ * Implements hook_csv2fields_field_instance_*_alter().
+ */
+function csv2fields_csv2fields_field_instance_label_alter(&$final_field_data, &$field_data) {
+  $final_field_data['label'] = $field_data['label'];
+}
+
+/**
+ * Implements hook_csv2fields_field_instance_*_alter().
+ */
+function csv2fields_csv2fields_field_instance_default_value_alter(&$final_field_data, &$field_data) {
+  // We can use truthy values here since 0, '', and FALSE are the defaults anyway.
+  if (!empty($field_data['default_value'])) {
+    $final_field_data['default_value'][0]['value'] = $field_data['default_value'];
+  }
+}
+
+/**
+ * Implements hook_csv2fields_field_instance_*_alter().
+ */
+function csv2fields_csv2fields_field_instance_description_alter(&$final_field_data, &$field_data) {
+  $final_field_data['description'] = $field_data['description'];
+}
+
+/**
+ * Implements hook_csv2fields_field_instance_*_alter().
+ */
+function csv2fields_csv2fields_field_instance_settings_prefix_alter(&$final_field_data, &$field_data) {
+  $final_field_data['settings']['prefix'] = $field_data['settings_prefix'];
+}
+
+/**
+ * Implements hook_csv2fields_field_instance_*_alter().
+ */
+function csv2fields_csv2fields_field_instance_settings_suffix_alter(&$final_field_data, &$field_data) {
+  $final_field_data['settings']['suffix'] = $field_data['settings_suffix'];
+}
+
+/**
+ * Implements hook_csv2fields_field_instance_*_alter().
+ */
+function csv2fields_csv2fields_field_instance_widget_weight_alter(&$final_field_data, &$field_data) {
+  $final_field_data['widget']['weight'] = $field_data['widget_weight'];
+}
+
+/**
+ * Implements hook_csv2fields_field_instance_alter().
+ */
+function csv2fields_csv2fields_field_instance_alter(&$final_field_data, &$field_data) {
+  if (!isset($final_field_data['widget']['weight']) || $final_field_data['widget']['weight'] == '') {
+    $final_field_data['widget']['weight'] = $field_data['row_number'];
+  }
+}
+
+/**
+ * Implements hook_csv2fields_group_*_alter().
+ */
+function csv2fields_csv2fields_group_label_alter(&$final_group_data, &$group_data) {
+  $final_group_data['label'] = $group_data['label'];
+}
+
+/**
+ * Implements hook_csv2fields_group_*_alter().
+ */
+function csv2fields_csv2fields_group_widget_weight_alter(&$final_group_data, &$group_data) {
+  $final_group_data['widget']['weight'] = $group_data['widget_weight'];
+}
+
+/**
+ * Implements hook_csv2fields_group_alter().
+ */
+function csv2fields_csv2fields_group_alter(&$final_group_data, &$group_data) {
+  if (!isset($final_group_data['widget']['weight']) || $final_group_data['widget']['weight'] == '') {
+    $final_group_data['widget']['weight'] = $group_data['row_number'];
+  }
+  print_r($final_group_data);
 }

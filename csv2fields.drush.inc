@@ -4,7 +4,7 @@
  * Implements hook_drush_command().
  */
 function csv2fields_drush_command() {
-  $items['gghh-csv2fields-import'] = array(
+  $items['csv2fields-import'] = array(
     'description' => 'Import fields from a csv into a content type.',
     'aliases' => array('c2f'),
     'arguments' => array(
@@ -30,16 +30,33 @@ function drush_csv2fields_import($type, $bundle, $csv) {
   $header_row = drush_get_option('header-row', 1);
   print dt($type) . PHP_EOL;
   print dt($csv) . PHP_EOL;
+
   $fields = _csv2fields_get_csv_lines($csv, $header_row, $subset);
-  $header_row = $fields['header_row'];
+  $headers = $fields['header_row'];
   unset($fields['header_row']);
-  $map = _csv2fields_initialize_mapping($header_row);
-  $all_fields = field_info_field_map();
+  $headers = array_filter($headers);
+  $headers = array_flip($headers);
+  print_r($headers);
   foreach ($fields as $row_number => $field_data) {
-    if (!empty($field_data[$map['machine_name']]) && !empty($field_data[$map['type']])) {
-      print 'x: ' . $field_data[$map['machine_name']] . PHP_EOL;
-      $field = _csv2fields_add_field($field_data, $all_fields, $map);
-      $field_instance = _csv2fields_add_to_entity($field, $field_data, $all_fields, $map, $type, $bundle, $row_number);
+    $field_data = csv2fields_get_data($field_data, $headers);
+    $field_data['row_number'] = $row_number;
+    if (!isset($field_data['field_group_name']) || empty($field_data['field_group_name'])) {
+      $field_info = csv2fields_initialize_field($field_data, $type, $headers);
+      if ($field_info) {
+        $field_name = $field_info['field_name'];
+        $field_data['#field_info'] = $field_info;
+        $field_instance = csv2fields_initialize_instance($field_data, $type, $bundle, $field_name, $headers);
+        if (!empty($field_data['field_group_parent'])) {
+          csv2fields_add_field_to_group($field_name, $field_data['field_group_parent'], $type, $bundle);
+        }
+      }
+    }
+    else {
+      $group_name = $field_data['field_group_name'];
+      csv2fields_initialize_group($field_data, $type, $bundle, $group_name, $headers);
+      if (!empty($field_data['field_group_parent'])) {
+        csv2fields_add_field_to_group($group_name, $field_data['field_group_parent'], $type, $bundle);
+      }
     }
   }
 }
