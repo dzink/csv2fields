@@ -159,11 +159,11 @@ function csv2fields_initialize_group(&$group_data, $entity_type, $bundle, $group
   else {
     $group = (object) array(
       'identifier' => dt('@fieldName|@type|@bundle|form', array(
-        '@fieldName' => $group_name,
+        '@fieldName' => $group_data['field_group_name'],
         '@type' => $entity_type,
         '@bundle' => $bundle,
       )),
-      'group_name' => $group_name,
+      'group_name' => $group_data['field_group_name'],
       'entity_type' => $entity_type,
       'bundle' => $bundle,
       'mode' => 'form',
@@ -183,6 +183,7 @@ function csv2fields_initialize_group(&$group_data, $entity_type, $bundle, $group
     field_group_group_save($group);
     ctools_include('export');
     ctools_export_crud_enable('field_group', $group->identifier);
+    return $group;
   }
 }
 
@@ -201,6 +202,11 @@ function csv2fields_add_element_to_group($element_name, $field_group, $entity_ty
   if (!empty($group)) {
     $group->children[] = $element_name;
     field_group_group_save($group);
+  }
+  else {
+    drush_log("Couldn't find the group @group", array(
+      '@group' => $field_group,
+    ), 'error');
   }
 }
 
