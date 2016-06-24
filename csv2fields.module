@@ -143,6 +143,7 @@ function csv2fields_initialize_instance(&$field_data, $entity_type, $bundle, $fi
  * @return bool
  */
 function csv2fields_initialize_group(&$group_data, $entity_type, $bundle, $group_name, $headers) {
+  $final_group_data = array();
   foreach (array_keys($headers) as $group_property_name) {
     drupal_alter('csv2fields_group_' . $group_property_name, $final_group_data, $group_data);
   }
