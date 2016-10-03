@@ -11,7 +11,7 @@ function csv2fields_feeds_plugins() {
     'handler' => array(
       'parent' => 'FeedsProcessor', // A plugin needs to derive either directly or indirectly from FeedsFetcher, FeedsParser or FeedsProcessor.
       'class' => 'FeedsEntityStructureProcessor',
-      'file' => 'FeedsEntityStructureProcessor.inc',
+      'file' => 'plugins/FeedsEntityStructureProcessor.inc',
       'path' => drupal_get_path('module', 'csv2fields'),
     ),
   );

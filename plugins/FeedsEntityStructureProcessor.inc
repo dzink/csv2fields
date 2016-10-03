@@ -4,6 +4,16 @@
  * Creates entity structure from feed items.
  */
 class FeedsEntityStructureProcessor extends FeedsProcessor {
+
+  /**
+   * Implements parent::entityInfo().
+   */
+  protected function entityInfo() {
+    $info = parent::entityInfo();
+    $info['label plural'] = t('Fields');
+    return $info;
+  }
+
   /**
    * Creates the base fields.
    *
@@ -208,5 +218,163 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       $final_field_data[$property_name] = trim($field_data[$index]);
     }
     return $final_field_data;
+  }
+
+  /**
+   * Override parent::configDefaults().
+   */
+  public function configDefaults() {
+    return array(
+      'entity' => 'node',
+      'bundle' => 'page',
+    ) + parent::configDefaults();
+  }
+
+  public function configForm(&$form_state) {
+    $form = parent::configForm($form_state);
+    $entities = entity_get_info(NULL);
+
+    $entities = array_filter($entities, function($entity) {
+      return !empty($entity['fieldable']);
+    });
+
+    $entity_options = array_map(function($entity) {
+      return $entity['label'];
+    }, $entities);
+    $bundle_options = array_map(function($bundle) {
+      return $bundle['label'];
+    }, $entities[$this->entityType()]['bundles']);
+    if (!sizeof($bundle_options)) {
+      $bundle_options[$this->entityType()] = $entities[$this->entityType()]['label'];
+    }
+    dsm($entities);
+    $form['entity'] = array(
+      '#type' => 'select',
+      '#title' => t('Default entity'),
+      '#description' => t('Select the default entity to add fields to. This can be overridden by mapping to an entity.'),
+      '#options' => $entity_options,
+      '#default_value' => $this->entityType(),
+      '#weight' => -50,
+    );
+
+    $form['bundle'] = array(
+      '#type' => 'select',
+      '#title' => t('Default @entity type', array(
+        '@entity' => $entities[$this->entityType()]['label'],
+      )),
+      '#description' => t('Select the default entity to add fields to. This can be overridden by mapping to an entity.'),
+      '#options' => $bundle_options,
+      '#default_value' => $this->config['bundle'],
+    );
+
+    /*$form['update_existing']['#title'] = t('Update exisiting fields.');
+    $form['update_existing']['#description'] = t('Existing fields will be determined using mappings that are a "unique target".');
+    $form['update_existing']['#options'] = array(
+      0 (String, 28 characters ) t("Do not update existing fields"),
+      1 (String, 22 characters ) t("Replace existing fields"),
+      2 (String, 21 characters ) Update existing nodes
+    )
+
+    #options (Array, 3 elements)
+    0 (String, 28 characters ) Do not update existing nodes
+    1 (String, 22 characters ) Replace existing nodes
+    2 (String, 21 characters ) Update existing nodes    */
+    return $form;
+  }
+
+  /**
+   * Return available mapping targets.
+   */
+  public function getMappingTargets() {
+    $targets = array();
+    $targets['field_name'] = array(
+      'name' => t('Field Machine Name'),
+      'description' => t('The unique machine name of the field.'),
+      'optional_unique' => TRUE,
+    );
+    $targets['label'] = array(
+      'name' => t('Label'),
+      'description' => t('The display label.'),
+      'optional_unique' => TRUE,
+    );
+    $targets['type'] = array(
+      'name' => t('Field Type'),
+      'description' => t('The type of field (list_text, datetime, text_long, number_float, etc).'),
+    );
+    $targets['bundle'] = array(
+      'name' => t('Bundle'),
+      'description' => t('The machine name of the bundle to add this field to.'),
+    );
+    $targets['entity'] = array(
+      'name' => t('Entity Type'),
+      'description' => t('The machine name of the entity to add this field to.'),
+    );
+    $targets['description'] = array(
+      'name' => t('Help Description'),
+      'description' => t('Field help text.'),
+    );
+    $targets['default_value'] = array(
+      'name' => t('Default Value'),
+      'description' => t('The default value of a field.'),
+    );
+    $targets['required'] = array(
+      'name' => t('Required'),
+      'description' => t('Whether a field is required.'),
+    );
+    $targets['widget_type'] = array(
+      'name' => t('Widget Type'),
+      'description' => t('If not empty, this will select a widget type other than the default for the type.'),
+    );
+    $targets['cardinality'] = array(
+      'name' => t('Cardinality'),
+      'description' => t('The number of values allowed. Use -1 or any string that starts with \'inf\' (not case-sensitive) to indicate unlimited values.'),
+    );
+    $targets['allowed_values'] = array(
+      'name' => t('Allowed Values'),
+      'description' => t('A comma-separated list of possible values for list_* types.'),
+    );
+    $targets['settings_prefix'] = array(
+      'name' => t('Prefix'),
+      'description' => t('The prefix for a field'),
+    );
+    $targets['settings_suffix'] = array(
+      'name' => t('Suffix'),
+      'description' => t('The suffix for a field'),
+    );
+    $targets['settings_text_processing'] = array(
+      'name' => t('Text Filtering'),
+      'description' => t('Whether a text_long field should be plain or filterable. Leave empty or 0 (zero) for not plain, put anything else for filtered.'),
+    );
+    if (module_exists('field_group')) {
+      $targets['field_group_name'] = array(
+        'name' => t('Field Group'),
+        'description' => t('If not empty, this element will be converted into a group instead of a field. This should be the machine name of the group.'),
+      );
+      $targets['field_group_parent'] = array(
+        'name' => t('Field Group Parent'),
+        'description' => t('If not empty, this field or group will be placed inside the given group. The group must have been defined already, or it must be in a higher row in the csv file than the element being placed inside it. Groups may be nested.'),
+      );
+    }
+
+    $this->getHookTargets($targets);
+
+    return $targets;
+  }
+
+  public function entityType() {
+    if (!empty($this->config['entity'])) {
+      return $this->config['entity'];
+    }
+    else {
+      return 'node';
+    }
+  }
+
+  protected function entitySave($entity) {
+    //do nothing here
+  }
+
+  protected function entityDeleteMultiple($entity_ids) {
+    //do nothing here
   }
 }
