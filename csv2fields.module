@@ -5,13 +5,13 @@
  */
 function csv2fields_feeds_plugins() {
   $info = array();
-  $info['CSV2FieldsProcessor'] = array(
+  $info['FeedsEntityStructureProcessor'] = array(
     'name' => 'Entity Structure Processor',
     'description' => 'Scaffolds entity structure.',
     'handler' => array(
       'parent' => 'FeedsProcessor', // A plugin needs to derive either directly or indirectly from FeedsFetcher, FeedsParser or FeedsProcessor.
-      'class' => 'CSV2FieldsProcessor',
-      'file' => 'CSV2FieldsProcessor.inc',
+      'class' => 'FeedsEntityStructureProcessor',
+      'file' => 'FeedsEntityStructureProcessor.inc',
       'path' => drupal_get_path('module', 'csv2fields'),
     ),
   );
