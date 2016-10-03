@@ -37,20 +37,20 @@ function drush_csv2fields_import($entity_type, $bundle, $csv) {
     $field_data = _csv2fields_get_data($field_data, $headers);
     $field_data['row_number'] = $row_number;
     if (empty($field_data['field_group_name'])) {
-      $field_info = csv2fields_initialize_field($field_data, $headers);
+      $field_info = _csv2fields_initialize_field($field_data, $headers);
       if ($field_info) {
         $field_name = $field_info['field_name'];
         $field_data['#field_info'] = $field_info;
-        $field_instance = csv2fields_initialize_instance($field_data, $entity_type, $bundle, $field_name, $headers);
+        $field_instance = _csv2fields_initialize_instance($field_data, $entity_type, $bundle, $field_name, $headers);
         if (!empty($field_data['field_group_parent'])) {
-          csv2fields_add_element_to_group($field_name, $field_data['field_group_parent'], $entity_type, $field_instance['bundle']);
+          _csv2fields_add_element_to_group($field_name, $field_data['field_group_parent'], $entity_type, $field_instance['bundle']);
         }
       }
     }
     else {
-      $group_instance = csv2fields_initialize_group($field_data, $entity_type, $bundle, $field_data['field_group_name'], $headers);
+      $group_instance = _csv2fields_initialize_group($field_data, $entity_type, $bundle, $field_data['field_group_name'], $headers);
       if (!empty($field_data['field_group_parent'])) {
-        csv2fields_add_element_to_group($group_instance->group_name, $field_data['field_group_parent'], $entity_type, $bundle);
+        _csv2fields_add_element_to_group($group_instance->group_name, $field_data['field_group_parent'], $entity_type, $bundle);
       }
     }
   }
