@@ -196,3 +196,9 @@ function csv2fields_csv2fields_group_alter(&$final_group_data, &$group_data) {
     $final_group_data['widget']['weight'] = $group_data['row_number'];
   }
 }
+
+function csv2fields_bundle_callback($form, $form_state) {
+  watchdog('derp', 'meow', array(), WATCHDOG_NOTICE, 'link');
+  $form_state['rebuild'] = TRUE;
+  return $form['container'];
+}

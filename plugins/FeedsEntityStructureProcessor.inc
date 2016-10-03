@@ -1,5 +1,8 @@
 <?php
 
+define('FEEDS_ENTITY_STRUCTURE_UPDATE_EXISTING_BASE_BY_TYPE', 3);
+
+
 /**
  * Creates entity structure from feed items.
  */
@@ -107,6 +110,193 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       return field_create_instance($final_field_data);
     }
   }
+
+  /**
+   * Process the result of the parsing stage.
+   *
+   * @param FeedsSource $source
+   *   Source information about this import.
+   * @param FeedsParserResult $parser_result
+   *   The result of the parsing stage.
+   */
+  public function process(FeedsSource $source, FeedsParserResult $parser_result) {
+    $state = $source->state(FEEDS_PROCESS);
+    dsm($state);
+    if (!isset($state->removeList) && $parser_result->items) {
+      $this->initEntitiesToBeRemoved($source, $state);
+    }
+
+    $skip_new = $this->config['insert_new'] == FEEDS_SKIP_NEW;
+    $skip_existing = $this->config['update_existing'] == FEEDS_SKIP_EXISTING;
+
+    while ($item = $parser_result->shiftItem()) {
+
+      // Check if this item already exists. @TODO
+      $entity_id = $this->existingEntityId($source, $parser_result);
+      // If it's included in the feed, it must not be removed on clean.
+      if ($entity_id) {
+        unset($state->removeList[$entity_id]);
+      }
+
+      module_invoke_all('feeds_entity_structure_before_update', $source, $item, $entity_id);
+
+      // If it exists, and we are not updating, or if it does not exist, and we
+      // are not inserting, pass onto the next item.
+      if (($entity_id && $skip_existing) || (!$entity_id && $skip_new)) {
+        continue;
+      }
+
+      try {
+        $hash = $this->hash($item);
+        $changed = $hash !== $this->getHash($entity_id);
+
+        // Do not proceed if the item exists, has not changed, and we're not
+        // forcing the update.
+        if ($entity_id && !$changed && !$this->config['skip_hash_check']) {
+          continue;
+        }
+
+        // Load an existing entity.
+        if ($entity_id) {
+          $entity = $this->entityLoad($source, $entity_id);
+
+          // The feeds_item table is always updated with the info for the most
+          // recently processed entity. The only carryover is the entity_id.
+          $this->newItemInfo($entity, $source->feed_nid, $hash);
+          $entity->feeds_item->entity_id = $entity_id;
+          $entity->feeds_item->is_new = FALSE;
+        }
+
+        // Build a new entity.
+        else {
+          $entity = $this->newEntity($source);
+          $this->newItemInfo($entity, $source->feed_nid, $hash);
+        }
+
+        // Set property and field values.
+        $this->map($source, $parser_result, $entity);
+        $this->entityValidate($entity);
+
+        // Allow modules to alter the entity before saving.
+        module_invoke_all('feeds_entity_structure_presave', $source, $entity, $item, $entity_id);
+
+        // Enable modules to skip saving at all.
+        if (!empty($entity->feeds_item->skip)) {
+          continue;
+        }
+
+        // This will throw an exception on failure.
+        $this->entitySaveAccess($entity);
+        $this->entitySave($entity);
+
+        // Allow modules to perform operations using the saved entity data.
+        // $entity contains the updated entity after saving.
+        module_invoke_all('feeds_after_save', $source, $entity, $item, $entity_id);
+
+        // Track progress.
+        if (empty($entity_id)) {
+          $state->created++;
+        }
+        else {
+          $state->updated++;
+        }
+      }
+
+      // Something bad happened, log it.
+      catch (Exception $e) {
+        $state->failed++;
+        drupal_set_message($e->getMessage(), 'warning');
+        list($message, $arguments) = $this->createLogEntry($e, $entity, $item);
+        $source->log('import', $message, $arguments, WATCHDOG_ERROR);
+      }
+    }
+
+    // Set messages if we're done.
+    if ($source->progressImporting() != FEEDS_BATCH_COMPLETE) {
+      return;
+    }
+    // Remove not included items if needed.
+    // It depends on the implementation of the clean() method what will happen
+    // to items that were no longer in the source.
+    $this->clean($state);
+    $info = $this->entityInfo();
+    $tokens = array(
+      '@entity' => 'field',
+      '@entities' => 'fields',
+    );
+    $messages = array();
+    if ($state->created) {
+      $messages[] = array(
+       'message' => format_plural(
+          $state->created,
+          'Created @number @entity.',
+          'Created @number @entities.',
+          array('@number' => $state->created) + $tokens
+        ),
+      );
+    }
+    if ($state->updated) {
+      $messages[] = array(
+       'message' => format_plural(
+          $state->updated,
+          'Updated @number @entity.',
+          'Updated @number @entities.',
+          array('@number' => $state->updated) + $tokens
+        ),
+      );
+    }
+    if ($state->unpublished) {
+      $messages[] = array(
+        'message' => format_plural(
+            $state->unpublished,
+            'Unpublished @number @entity.',
+            'Unpublished @number @entities.',
+            array('@number' => $state->unpublished) + $tokens
+        ),
+      );
+    }
+    if ($state->blocked) {
+      $messages[] = array(
+        'message' => format_plural(
+          $state->blocked,
+          'Blocked @number @entity.',
+          'Blocked @number @entities.',
+          array('@number' => $state->blocked) + $tokens
+        ),
+      );
+    }
+    if ($state->deleted) {
+      $messages[] = array(
+       'message' => format_plural(
+          $state->deleted,
+          'Removed @number @entity.',
+          'Removed @number @entities.',
+          array('@number' => $state->deleted) + $tokens
+        ),
+      );
+    }
+    if ($state->failed) {
+      $messages[] = array(
+       'message' => format_plural(
+          $state->failed,
+          'Failed importing @number @entity.',
+          'Failed importing @number @entities.',
+          array('@number' => $state->failed) + $tokens
+        ),
+        'level' => WATCHDOG_ERROR,
+      );
+    }
+    if (empty($messages)) {
+      $messages[] = array(
+        'message' => t('There are no new @entities.', array('@entities' => strtolower($info['label plural']))),
+      );
+    }
+    foreach ($messages as $message) {
+      drupal_set_message($message['message']);
+      $source->log('import', $message['message'], array(), isset($message['level']) ? $message['level'] : WATCHDOG_INFO);
+    }
+  }
+
 
   /**
    * Creates a group.
@@ -227,10 +417,111 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     return array(
       'entity' => 'node',
       'bundle' => 'page',
+      'update_existing_bases' => FEEDS_SKIP_EXISTING,
+      'update_existing_instances' => FEEDS_SKIP_EXISTING,
+      'mappings' => array(
+        0 => array(
+          'source' => 'entity',
+          'target' => 'entity',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        1 => array(
+          'source' => 'bundle',
+          'target' => 'bundle',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        2 => array(
+          'source' => 'field_name',
+          'target' => 'field_name',
+          'unique' => 1,
+          'language' => 'und',
+        ),
+        3 => array(
+          'source' => 'type',
+          'target' => 'type',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        4 => array(
+          'source' => 'label',
+          'target' => 'label',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        5 => array(
+          'source' => 'cardinality',
+          'target' => 'cardinality',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        6 => array(
+          'source' => 'allowed_values',
+          'target' => 'allowed_values',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        7 => array(
+          'source' => 'description',
+          'target' => 'description',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        8 => array(
+          'source' => 'default_value',
+          'target' => 'default_value',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        9 => array(
+          'source' => 'required',
+          'target' => 'required',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        10 => array(
+          'source' => 'widget_type',
+          'target' => 'widget_type',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        11 => array(
+          'source' => 'settings_text_processing',
+          'target' => 'settings_text_processing',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        12 => array(
+          'source' => 'settings_prefix',
+          'target' => 'settings_prefix',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        13 => array(
+          'source' => 'settings_suffix',
+          'target' => 'settings_suffix',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        14 => array(
+          'source' => 'field_group_name',
+          'target' => 'field_group_name',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        15 => array(
+          'source' => 'field_group_parent',
+          'target' => 'field_group_parent',
+          'unique' => FALSE,
+        ),
+      ),
     ) + parent::configDefaults();
   }
 
   public function configForm(&$form_state) {
+    //drupal_page_is_cacheable(FALSE);
+
     $form = parent::configForm($form_state);
     $entities = entity_get_info(NULL);
 
@@ -247,7 +538,8 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     if (!sizeof($bundle_options)) {
       $bundle_options[$this->entityType()] = $entities[$this->entityType()]['label'];
     }
-    dsm($entities);
+    dsm($form);
+    $form_state['rebuild'] = TRUE;
     $form['entity'] = array(
       '#type' => 'select',
       '#title' => t('Default entity'),
@@ -255,7 +547,15 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       '#options' => $entity_options,
       '#default_value' => $this->entityType(),
       '#weight' => -50,
+      '#required' => TRUE,
+      '#ajax' => array(
+        'callback' => 'csv2fields_bundle_callback',
+        'wrapper' => 'feeds-entity-structure-processor-bundle',
+        'effect' => 'fade',
+      ),
     );
+
+    unset($form['input_format']);
 
     $form['bundle'] = array(
       '#type' => 'select',
@@ -265,20 +565,41 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       '#description' => t('Select the default entity to add fields to. This can be overridden by mapping to an entity.'),
       '#options' => $bundle_options,
       '#default_value' => $this->config['bundle'],
+      '#prefix' => '<div id="feeds-entity-structure-processor-bundle">',
+      '#suffix' => '</div>',
+      '#weight' => -49,
+      '#required' => TRUE,
     );
 
-    /*$form['update_existing']['#title'] = t('Update exisiting fields.');
-    $form['update_existing']['#description'] = t('Existing fields will be determined using mappings that are a "unique target".');
-    $form['update_existing']['#options'] = array(
-      0 (String, 28 characters ) t("Do not update existing fields"),
-      1 (String, 22 characters ) t("Replace existing fields"),
-      2 (String, 21 characters ) Update existing nodes
-    )
+    unset($form['update_existing']);
 
-    #options (Array, 3 elements)
-    0 (String, 28 characters ) Do not update existing nodes
-    1 (String, 22 characters ) Replace existing nodes
-    2 (String, 21 characters ) Update existing nodes    */
+    $form['update_existing_bases'] = array(
+      '#type' => 'radios',
+      '#title' => t('Update existing field bases'),
+      '#description' =>
+        t('Existing field bases will be determined using mappings that are a "unique target".'),
+      '#options' => array(
+        FEEDS_SKIP_EXISTING => t('Do not update existing field bases'),
+        FEEDS_UPDATE_EXISTING => t('Update existing field bases'),
+        FEEDS_ENTITY_STRUCTURE_UPDATE_EXISTING_BASE_BY_TYPE => t('Update existing field bases only if the type is the same'),
+      ),
+      '#default_value' => $this->config['update_existing_bases'],
+    );
+
+    $form['update_existing_instances'] = array(
+      '#type' => 'radios',
+      '#title' => t('Update existing field instances'),
+      '#description' =>
+        t('Existing field instances will be determined using mappings that are a "unique target".'),
+      '#options' => array(
+        FEEDS_SKIP_EXISTING => t('Do not update existing field instances'),
+        FEEDS_UPDATE_EXISTING => t('Update existing field instances'),
+      ),
+      '#default_value' => $this->config['update_existing_instances'],
+    );
+
+    $form['update_non_existent']['#options']['delete'] = t('Delete non-existent field instances, and delete field base if not used on other entities');
+
     return $form;
   }
 
@@ -356,9 +677,33 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       );
     }
 
+    // Add hooks, but do not actually
+    $original_targets = $targets;
     $this->getHookTargets($targets);
-
+    foreach (array_keys($targets) as $target_id) {
+      if (!isset($original_targets[$target_id])) {
+        unset($targets[$target_id]);
+      }
+    }
     return $targets;
+  }
+
+  /**
+   * Allows other modules to expose targets.
+   *
+   * @param array &$targets
+   *   The existing target array.
+   */
+  protected function getHookTargets(array &$targets) {
+    self::loadMappers();
+
+    // This is a hacky way to make sure that only entity structure mappings are
+    // added, instead of mappings for the $entity_type.
+    $entity_type = 'entity_structure';
+    $bundle = NULL;
+    $targets += module_invoke_all('feeds_processor_targets', $entity_type, $bundle);
+
+    drupal_alter('feeds_processor_targets', $targets, $entity_type, $bundle);
   }
 
   public function entityType() {
