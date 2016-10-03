@@ -17,6 +17,29 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     return $info;
   }
 
+  protected function parseCardinality($cardinality) {
+    if (empty($cardinality)) {
+      // No data, do not overwrite.
+      return '';
+    }
+    elseif (intval($cardinality)) {
+      return $cardinality;
+    }
+    elseif (strtolower(substr($cardinality, 0, 3)) == 'inf') {
+      return -1;
+    }
+    else {
+      return 1;
+    }
+  }
+
+  protected function parseAllowedValues($options) {
+    $options = str_getcsv($options);
+    $options = array_map('trim', $options);
+    $options = array_combine($options, $options);
+    return $options;
+  }
+
   /**
    * Creates the base fields.
    *
@@ -30,43 +53,34 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
    *   Returns either the result of field_info_field, the newly created field, or
    *   FALSE if there were errors.
    */
-  protected function initialize_field($field_data, $headers) {
-    $final_field_data = array();
-    foreach (array_keys($headers) as $field_property_name) {
-      drupal_alter('csv2fields_field_base_' . $field_property_name, $final_field_data, $field_data);
-    }
-    drupal_alter('csv2fields_field_base', $final_field_data, $field_data);
+  protected function updateFieldBase(FeedsSource $source, FeedsParserResult $parser_result, $field_base) {
+    $skip_new = $this->config['insert_new'] == FEEDS_SKIP_NEW;
+    $skip_existing_base = $this->config['update_existing_base'] == FEEDS_SKIP_EXISTING;
+    $skip_existing_instance = $this->config['update_existing_instance'] == FEEDS_SKIP_EXISTING;
 
-    // If neither a field_name or type are set, this is probably not a legitimate
-    // attempt at importing a field - more likely an empty line.
-    if (!$final_field_data['field_name'] && !$final_field_data['type']) {
-      return FALSE;
-    }
+    $field_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_name');
+    $field_name = $this->processMachineName($field_name);
 
-    if (!$final_field_data['field_name']) {
-      $final_field_data['errors'][] = dt('Missing field_name');
-    }
+    $field_base_properties = array(
+      'type' => $this->getSourceValueFromTarget($source, $parser_result, 'type'),
+      'cardinality' => $this->parseCardinality($this->getSourceValueFromTarget($source, $parser_result, 'cardinality')),
 
-    if (!$final_field_data['type']) {
-      $final_field_data['errors'][] = dt('Missing type');
-    }
+    );
 
-    if (isset($final_field_data['errors']) && count($final_field_data['errors'])) {
-      foreach ($final_field_data['errors'] as $error) {
-        drush_log(dt('@error on row @row_number', array(
-          '@row_number' => $field_data['row_number'],
-          '@error' => $error,
-        )), 'error');
-      }
-      return FALSE;
+    $field_base = array_merge($field_base, $field_base_properties);
+
+    $allowed_values = $this->parseAllowedValues($this->getSourceValueFromTarget($source, $parser_result, 'allowed_values'));
+    if (!empty($allowed_values)) {
+      $field_base['settings']['allowed_values'] = $allowed_values;
+      $field_base['settings']['allowed_values_function'] = '';
     }
-    else {
-      $field = field_info_field($final_field_data['field_name']);
-      if ($field) {
-        return $field;
-      }
-      return field_create_field($final_field_data);
-    }
+    $field_base_properties_settings = array(
+      'options' => $this->parseOptions($this->getSourceValueFromTarget($source, $parser_result, 'allowed_values')),
+    );
+
+
+    drupal_alter('feeds_entity_structure_field_base', $source, $parser_result, $field_base);
+    return $field_base;
   }
 
   /**
@@ -121,23 +135,61 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
    */
   public function process(FeedsSource $source, FeedsParserResult $parser_result) {
     $state = $source->state(FEEDS_PROCESS);
-    dsm($state);
     if (!isset($state->removeList) && $parser_result->items) {
       $this->initEntitiesToBeRemoved($source, $state);
     }
 
     $skip_new = $this->config['insert_new'] == FEEDS_SKIP_NEW;
-    $skip_existing = $this->config['update_existing'] == FEEDS_SKIP_EXISTING;
+    $skip_existing_base = $this->config['update_existing_base'] == FEEDS_SKIP_EXISTING;
+    $skip_existing_instance = $this->config['update_existing_instance'] == FEEDS_SKIP_EXISTING;
 
     while ($item = $parser_result->shiftItem()) {
-
       // Check if this item already exists. @TODO
-      $entity_id = $this->existingEntityId($source, $parser_result);
+
+      $field_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_name');
+      $field_name = $this->processMachineName($field_name);
+      $group_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_group_name');
+      $group_name = $this->processMachineName($group_name);
+      $entity_name = $this->getSourceValueFromTarget($source, $parser_result, 'entity');
+      $bundle_name = $this->getSourceValueFromTarget($source, $parser_result, 'bundle');
+      // @TODO remove from delete list BEFORE checking anything else.
+
+      if (!empty($field_name)) {
+        $field_base = $this->existingFieldBase($field_name);
+        if (empty($field_base) && !$skip_new) {
+          $field_base = array(
+            'field_name' => $field_name,
+            'cardinality' => 1,
+          );
+          $this->updateFieldBase($source, $parser_result, $field_base);
+          field_create_field($field_base);
+        }
+        elseif (!empty($field_base)) {
+          $type = $this->getSourceValueFromTarget($source, $parser_result, 'type');
+          if (($skip_existing_base == FEEDS_ENTITY_STRUCTURE_UPDATE_EXISTING_BASE_BY_TYPE && $type == $field_base['type'])
+          || $skip_existing_base == FEEDS_UPDATE_EXISTING) {
+            $this->updateFieldBase($source, $parser_result, $field_base);
+            field_update_field($field_base);
+          }
+        }
+
+        $field_instance = $this->existingFieldInstance($field_name, $entity_name, $entity_bundle);
+        if (empty($field_base)) {
+          // Create a stub
+        }
+        else {
+          // Check and see if this should be updated, and update.
+        }
+      }
+      elseif (!empty($group_name)) {
+
+      }
+
+      continue;
       // If it's included in the feed, it must not be removed on clean.
       if ($entity_id) {
         unset($state->removeList[$entity_id]);
       }
-
       module_invoke_all('feeds_entity_structure_before_update', $source, $item, $entity_id);
 
       // If it exists, and we are not updating, or if it does not exist, and we
@@ -210,7 +262,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
         $source->log('import', $message, $arguments, WATCHDOG_ERROR);
       }
     }
-
+    return;
     // Set messages if we're done.
     if ($source->progressImporting() != FEEDS_BATCH_COMPLETE) {
       return;
@@ -297,6 +349,27 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     }
   }
 
+  protected function existingFieldBase($field_name) {
+    if (!empty($field_name)) {
+      $field = field_info_field($field_name);
+      return $field;
+    }
+    return FALSE;
+  }
+
+  protected function getSourceValueFromTarget(FeedsSource $source, FeedsParserResult $parser_result, $target) {
+    $mappings = $this->getMappings();
+    foreach($mappings as $mid => $mapping) {
+      if ($mapping['target'] == $target) {
+        $item = $parser_result->currentItem();
+        $element_key = $mapping['source'];
+        return isset($item[$element_key]) ? $item[$element_key] : '';
+      }
+    }
+
+    // Normally I would make this FALSE, but parsers seem to prefer ''
+    return '';
+  }
 
   /**
    * Creates a group.
@@ -721,5 +794,9 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
 
   protected function entityDeleteMultiple($entity_ids) {
     //do nothing here
+  }
+
+  protected function processMachineName($field_name) {
+    return str_replace(' ', '_', strtolower(trim($field_name)));
   }
 }
