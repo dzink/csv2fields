@@ -3,10 +3,11 @@
 /**
  * Gets lines from the csv.
  *
- * @param $csv
+ * @param string $csv
  *   The path to a csv to read
- * @param $subset
+ * @param string $subset
  *   The subset string from cli options. Should look something like '138:187'.
+ *
  * @return array
  *   An array of each row of the csv. The header row has a key of 'header_row',
  *   while every other row's key is an integer.
@@ -37,11 +38,12 @@ function _csv2fields_get_csv_lines(&$csv, $header_row = 1, $subset = '') {
 /**
  * Creates the base fields.
  *
- * @param $field_data
+ * @param array $field_data
  *   An associative array that contains the data for this field.
- * @param $headers
+ * @param array $headers
  *   An associative array where the keys are the header names and the values are
  *   the header indices.
+ *
  * @return array|bool|mixed|void
  *   Returns either the result of field_info_field, the newly created field, or
  *   FALSE if there were errors.
@@ -67,7 +69,7 @@ function csv2fields_initialize_field($field_data, $headers) {
     $final_field_data['errors'][] = dt('Missing type');
   }
 
-  if (isset($final_field_data['errors']) && sizeof($final_field_data['errors'])) {
+  if (isset($final_field_data['errors']) && count($final_field_data['errors'])) {
     foreach ($final_field_data['errors'] as $error) {
       drush_log(dt('@error on row @row_number', array(
         '@row_number' => $field_data['row_number'],
@@ -88,22 +90,21 @@ function csv2fields_initialize_field($field_data, $headers) {
 /**
  * Attaches a field to an instance, with settings, widgets, etc ready to go.
  *
- * @param $field_data
+ * @param array $field_data
  *   An associative array that contains the data for this field.
- * @param $entity_type
+ * @param string $entity_type
  *   The entity type to attach to.
- * @param $bundle
+ * @param string $bundle
  *   The bundle type to attach to.
- * @param $field_name
+ * @param string $field_name
  *   The name of the field.
- * @param $headers
+ * @param array $headers
  *   An associative array where the keys are the header names and the values are
  *   the header indices.
  *
  * @return bool|mixed
  *   Either returns the new entity instance or FALSE if there were errors.
  */
-
 function csv2fields_initialize_instance(&$field_data, $entity_type, $bundle, $field_name, $headers) {
   $final_field_data = array(
     'entity_type' => $entity_type,
@@ -114,7 +115,7 @@ function csv2fields_initialize_instance(&$field_data, $entity_type, $bundle, $fi
     drupal_alter('csv2fields_field_instance_' . $field_property_name, $final_field_data, $field_data);
   }
   drupal_alter('csv2fields_field_instance', $final_field_data, $field_data);
-  if (isset($final_field_data['errors']) && sizeof($final_field_data['errors'])) {
+  if (isset($final_field_data['errors']) && count($final_field_data['errors'])) {
     foreach ($final_field_data['errors'] as $error) {
       drush_log(dt('@error on row @row_number', array(
         '@row_number' => $field_data['row_number'],
@@ -131,15 +132,18 @@ function csv2fields_initialize_instance(&$field_data, $entity_type, $bundle, $fi
 /**
  * Creates a group.
  *
- * @param $group_data
+ * @param array $group_data
  *   An associative array containing all of the data for this group.
- * @param $entity_type
+ * @param string $entity_type
  *   The entity type to attach this group to.
- * @param $bundle
+ * @param string $bundle
  *   The bundle to attach this group to.
- * @param $group_name
+ * @param string $group_name
  *   The group's name.
- * @param $headers
+ * @param array $headers
+ *   An associative array where the keys are the header names and the values are
+ *   the header indices.
+ *
  * @return bool
  */
 function csv2fields_initialize_group(&$group_data, $entity_type, $bundle, $group_name, $headers) {
@@ -148,7 +152,7 @@ function csv2fields_initialize_group(&$group_data, $entity_type, $bundle, $group
     drupal_alter('csv2fields_group_' . $group_property_name, $final_group_data, $group_data);
   }
   drupal_alter('csv2fields_group', $final_group_data, $group_data);
-  if (isset($final_group_data['errors']) && sizeof($final_group_data['errors'])) {
+  if (isset($final_group_data['errors']) && count($final_group_data['errors'])) {
     foreach ($final_group_data['errors'] as $error) {
       drush_log(dt('@error on row @row_number', array(
         '@row_number' => $group_data['row_number'],
@@ -189,9 +193,14 @@ function csv2fields_initialize_group(&$group_data, $entity_type, $bundle, $group
 }
 
 /**
- * @param $field_instance - A field instance to add to a group. All of the data
- *    about the parent group gets added here, the field instance is added, and
- *    then the group is saved.
+ * @param string $element_name
+ *   The name of the field or group to add.
+ * @param string $field_group
+ *   The name of the field group to add to.
+ * @param string $entity_type
+ *   The name of the entity.
+ * @param string $bundle
+ *   The name of the bundle.
  */
 function csv2fields_add_element_to_group($element_name, $field_group, $entity_type, $bundle) {
   $groups = field_group_read_groups(array(
@@ -212,7 +221,7 @@ function csv2fields_add_element_to_group($element_name, $field_group, $entity_ty
 }
 
 /**
- * Implements hook_csv2fields_field_base_*_alter().
+ * Implements hook_csv2fields_field_base_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_base_field_name_alter(&$final_field_data, &$field_data) {
   $field_name = $field_data['field_name'];
@@ -221,14 +230,14 @@ function csv2fields_csv2fields_field_base_field_name_alter(&$final_field_data, &
 }
 
 /**
- * Implements hook_csv2fields_field_base_*_alter().
+ * Implements hook_csv2fields_field_base_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_base_type_alter(&$final_field_data, &$field_data) {
   $final_field_data['type'] = $field_data['type'];
 }
 
 /**
- * Implements hook_csv2fields_field_base_*_alter().
+ * Implements hook_csv2fields_field_base_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_base_cardinality_alter(&$final_field_data, &$field_data) {
   if (!isset($field_data['cardinality'])) {
@@ -246,7 +255,7 @@ function csv2fields_csv2fields_field_base_cardinality_alter(&$final_field_data, 
 }
 
 /**
- * Implements hook_csv2fields_field_base_*_alter().
+ * Implements hook_csv2fields_field_base_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_base_allowed_values_alter(&$final_field_data, &$field_data) {
   if ($field_data['allowed_values']) {
@@ -261,14 +270,14 @@ function csv2fields_csv2fields_field_base_allowed_values_alter(&$final_field_dat
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_label_alter(&$final_field_data, &$field_data) {
   $final_field_data['label'] = $field_data['label'];
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_default_value_alter(&$final_field_data, &$field_data) {
   // We can use truthy values here since 0, '', and FALSE are the defaults anyway.
@@ -282,44 +291,43 @@ function csv2fields_csv2fields_field_instance_default_value_alter(&$final_field_
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_required_alter(&$final_field_data, &$field_data) {
   $final_field_data['required'] = $field_data['required'];
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_description_alter(&$final_field_data, &$field_data) {
   $final_field_data['description'] = $field_data['description'];
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_settings_prefix_alter(&$final_field_data, &$field_data) {
   $final_field_data['settings']['prefix'] = $field_data['settings_prefix'];
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_prefix_alter(&$final_field_data, &$field_data) {
   $field_data['settings_prefix'] = $field_data['prefix'];
   csv2fields_csv2fields_field_instance_settings_prefix_alter($final_field_data, $field_data);
 }
 
-
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_settings_suffix_alter(&$final_field_data, &$field_data) {
   $final_field_data['settings']['suffix'] = $field_data['settings_suffix'];
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_suffix_alter(&$final_field_data, &$field_data) {
   $field_data['settings_suffix'] = $field_data['suffix'];
@@ -327,7 +335,7 @@ function csv2fields_csv2fields_field_instance_suffix_alter(&$final_field_data, &
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_settings_text_processing_alter(&$final_field_data, &$field_data) {
   if ($field_data['type'] == 'text_long') {
@@ -336,7 +344,7 @@ function csv2fields_csv2fields_field_instance_settings_text_processing_alter(&$f
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_filter_text_alter(&$final_field_data, &$field_data) {
   $field_data['settings_text_processing'] = $field_data['filter_text'];
@@ -344,7 +352,7 @@ function csv2fields_csv2fields_field_instance_filter_text_alter(&$final_field_da
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_widget_type_alter(&$final_field_data, &$field_data) {
   if ($widget_type = $field_data['widget_type']) {
@@ -353,7 +361,7 @@ function csv2fields_csv2fields_field_instance_widget_type_alter(&$final_field_da
 }
 
 /**
- * Implements hook_csv2fields_field_instance_*_alter().
+ * Implements hook_csv2fields_field_instance_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_field_instance_widget_weight_alter(&$final_field_data, &$field_data) {
   $final_field_data['widget']['weight'] = $field_data['widget_weight'];
@@ -369,14 +377,14 @@ function csv2fields_csv2fields_field_instance_alter(&$final_field_data, &$field_
 }
 
 /**
- * Implements hook_csv2fields_group_*_alter().
+ * Implements hook_csv2fields_group_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_group_label_alter(&$final_group_data, &$group_data) {
   $final_group_data['label'] = $group_data['label'];
 }
 
 /**
- * Implements hook_csv2fields_group_*_alter().
+ * Implements hook_csv2fields_group_HEADER_NAME_alter().
  */
 function csv2fields_csv2fields_group_widget_weight_alter(&$final_group_data, &$group_data) {
   $final_group_data['widget']['weight'] = $group_data['widget_weight'];
@@ -399,6 +407,7 @@ function csv2fields_csv2fields_group_alter(&$final_group_data, &$group_data) {
  * @param $headers
  *   An associative array where the column name is the key, and the column number
  *   is the value.
+ *
  * @return array
  *   An associative array where each column is the key and the data for the row
  *   is the value.
