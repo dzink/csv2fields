@@ -17,7 +17,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     return $info;
   }
 
-  protected function parseCardinality($cardinality) {
+  public static function parseCardinality($cardinality) {
     if (empty($cardinality)) {
       // No data, do not overwrite.
       return '';
@@ -33,11 +33,24 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     }
   }
 
-  protected function parseAllowedValues($options) {
+  public static function parseAllowedValues($options) {
     $options = str_getcsv($options);
     $options = array_map('trim', $options);
     $options = array_combine($options, $options);
     return $options;
+  }
+
+  public static function parseRequired($required) {
+    $required = strtolower(trim($required));
+    if ($required == 'true' || $required == '1' || $required == 'yes') {
+      return TRUE;
+    }
+    elseif ($required == '') {
+      return '';
+    }
+    else {
+      return FALSE;
+    }
   }
 
   /**
@@ -54,19 +67,11 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
    *   FALSE if there were errors.
    */
   protected function updateFieldBase(FeedsSource $source, FeedsParserResult $parser_result, $field_base) {
-    $skip_new = $this->config['insert_new'] == FEEDS_SKIP_NEW;
-    $skip_existing_base = $this->config['update_existing_base'] == FEEDS_SKIP_EXISTING;
-    $skip_existing_instance = $this->config['update_existing_instance'] == FEEDS_SKIP_EXISTING;
-
-    $field_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_name');
-    $field_name = $this->processMachineName($field_name);
-
     $field_base_properties = array(
       'type' => $this->getSourceValueFromTarget($source, $parser_result, 'type'),
       'cardinality' => $this->parseCardinality($this->getSourceValueFromTarget($source, $parser_result, 'cardinality')),
-
     );
-
+    $field_base_properties = array_filter($field_base_properties);
     $field_base = array_merge($field_base, $field_base_properties);
 
     $allowed_values = $this->parseAllowedValues($this->getSourceValueFromTarget($source, $parser_result, 'allowed_values'));
@@ -74,10 +79,6 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       $field_base['settings']['allowed_values'] = $allowed_values;
       $field_base['settings']['allowed_values_function'] = '';
     }
-    $field_base_properties_settings = array(
-      'options' => $this->parseOptions($this->getSourceValueFromTarget($source, $parser_result, 'allowed_values')),
-    );
-
 
     drupal_alter('feeds_entity_structure_field_base', $source, $parser_result, $field_base);
     return $field_base;
@@ -101,27 +102,72 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
    * @return bool|mixed
    *   Either returns the new entity instance or FALSE if there were errors.
    */
-  protected function initialize_instance(&$field_data, $entity_type, $bundle, $field_name, $headers) {
-    $final_field_data = array(
-      'entity_type' => $entity_type,
-      'bundle' => $bundle,
-      'field_name' => $field_name,
+  protected function updateFieldInstance(FeedsSource $source, FeedsParserResult $parser_result, $field_instance) {
+    $field_instance = array_merge($field_instance, array(
+      'label' => $this->getSourceValueFromTarget($source, $parser_result, 'label'),
+      'default_value' => $this->getSourceValueFromTarget($source, $parser_result, 'default_value'),
+      'description' => $this->getSourceValueFromTarget($source, $parser_result, 'description'),
+      'required' => $this->parseRequired($this->getSourceValueFromTarget($source, $parser_result, 'required')),
+    ));
+    $field_instance_settings = array(
+      'prefix' => $this->getSourceValueFromTarget($source, $parser_result, 'settings_prefix'),
+      'suffix' => $this->getSourceValueFromTarget($source, $parser_result, 'settings_suffix'),
+      'text_processing' => $this->getSourceValueFromTarget($source, $parser_result, 'text_processing'),
     );
-    foreach (array_keys($headers) as $field_property_name) {
-      drupal_alter('csv2fields_field_instance_' . $field_property_name, $final_field_data, $field_data);
+    $field_instance_widget = array(
+      'type' => $this->getSourceValueFromTarget($source, $parser_result, 'widget_type'),
+      'weight' => $this->getSourceValueFromTarget($source, $parser_result, 'widget_weight'),
+    );
+
+    $field_instance_properties = array_filter($field_instance_properties, function($property) {
+      return $property != '';
+    });
+    $field_instance_settings = array_filter($field_instance_settings, function($property) {
+      return $property != '';
+    });
+    $field_instance_widget = array_filter($field_instance_properties, function($property) {
+      return $property != '';
+    });
+
+    $field_instance['settings'] = $field_instance_settings;
+    $field_instance['widget'] = $field_instance_widget;
+
+    drupal_alter('feeds_entity_structure_field_instance', $field_instance_widget, $source, $parser_result);
+
+    return $field_instance;
+  }
+
+  protected function shouldImportFieldBase($field_base, $field_type) {
+    $skip_new = $this->config['insert_new'] == FEEDS_SKIP_NEW;
+    $skip_existing_base = $this->config['update_existing_base'];
+
+    if ($skip_new && empty($field_base)) {
+      return FALSE;
     }
-    drupal_alter('csv2fields_field_instance', $final_field_data, $field_data);
-    if (isset($final_field_data['errors']) && count($final_field_data['errors'])) {
-      foreach ($final_field_data['errors'] as $error) {
-        drush_log(dt('@error on row @row_number', array(
-          '@row_number' => $field_data['row_number'],
-          '@error' => $error,
-        )), 'error');
-      }
+    elseif ($skip_existing_base == FEEDS_SKIP_EXISTING && !empty($field_base)) {
+      return FALSE;
+    }
+    elseif ($skip_existing_base == FEEDS_ENTITY_STRUCTURE_UPDATE_EXISTING_BASE_BY_TYPE &&
+        !empty($field_base) && $field_type != $field_base['type'] && !empty($field_type)) {
       return FALSE;
     }
     else {
-      return field_create_instance($final_field_data);
+      return TRUE;
+    }
+  }
+
+  protected function shouldImportFieldInstance($field_instance) {
+    $skip_new = $this->config['insert_new'] == FEEDS_SKIP_NEW;
+    $skip_existing_instance = $this->config['update_existing_instances'] == FEEDS_SKIP_EXISTING;
+
+    if ($skip_new && empty($field_instance)) {
+      return FALSE;
+    }
+    elseif ($skip_existing_instance && !empty($field_instance)) {
+      return FALSE;
+    }
+    else {
+      return TRUE;
     }
   }
 
@@ -138,47 +184,55 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     if (!isset($state->removeList) && $parser_result->items) {
       $this->initEntitiesToBeRemoved($source, $state);
     }
-
-    $skip_new = $this->config['insert_new'] == FEEDS_SKIP_NEW;
-    $skip_existing_base = $this->config['update_existing_base'] == FEEDS_SKIP_EXISTING;
-    $skip_existing_instance = $this->config['update_existing_instance'] == FEEDS_SKIP_EXISTING;
+    dsm($state->removeList);
 
     while ($item = $parser_result->shiftItem()) {
-      // Check if this item already exists. @TODO
-
       $field_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_name');
-      $field_name = $this->processMachineName($field_name);
+      $field_name = $this->processMachineName($field_name, 'field_');
       $group_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_group_name');
-      $group_name = $this->processMachineName($group_name);
+      $group_name = $this->processMachineName($group_name, 'group_');
       $entity_name = $this->getSourceValueFromTarget($source, $parser_result, 'entity');
+      $entity_name = !empty($entity_name) ? $entity_name : $this->entityType();
       $bundle_name = $this->getSourceValueFromTarget($source, $parser_result, 'bundle');
+      $bundle_name = !empty($bundle_name) ? $bundle_name : $this->bundle();
+      $field_type = $this->getSourceValueFromTarget($source, $parser_result, 'type');
       // @TODO remove from delete list BEFORE checking anything else.
-
+      dsm($field_name);
       if (!empty($field_name)) {
         $field_base = $this->existingFieldBase($field_name);
-        if (empty($field_base) && !$skip_new) {
-          $field_base = array(
-            'field_name' => $field_name,
-            'cardinality' => 1,
-          );
-          $this->updateFieldBase($source, $parser_result, $field_base);
-          field_create_field($field_base);
-        }
-        elseif (!empty($field_base)) {
-          $type = $this->getSourceValueFromTarget($source, $parser_result, 'type');
-          if (($skip_existing_base == FEEDS_ENTITY_STRUCTURE_UPDATE_EXISTING_BASE_BY_TYPE && $type == $field_base['type'])
-          || $skip_existing_base == FEEDS_UPDATE_EXISTING) {
+        if ($this->shouldImportFieldBase($field_base, $field_type) || TRUE) {
+          if (empty($field_base)) {
+            $field_base = array(
+              'field_name' => $field_name,
+              'cardinality' => 1,
+            );
+            $this->updateFieldBase($source, $parser_result, $field_base);
+            field_create_field($field_base);
+            drupal_set_message('new field');
+          }
+          elseif (!empty($field_base)) {
             $this->updateFieldBase($source, $parser_result, $field_base);
             field_update_field($field_base);
+            drupal_set_message('updated field');
           }
         }
-
         $field_instance = $this->existingFieldInstance($field_name, $entity_name, $entity_bundle);
-        if (empty($field_base)) {
-          // Create a stub
-        }
-        else {
-          // Check and see if this should be updated, and update.
+        if ($this->shouldImportFieldInstance($field_instance) || TRUE) {
+          if (empty($field_instance)) {
+            $field_instance = array(
+              'field_name' => $field_name,
+              'entity_type' => $entity_name,
+              'bundle' => $bundle_name,
+            );
+            $this->updateFieldInstance($source, $parser_result, $field_instance);
+            field_create_instance($field_base);
+            drupal_set_message('new field');
+          }
+          else {
+            $this->updateFieldInstance($source, $parser_result, $field_instance);
+            field_update_instance($field_base);
+            drupal_set_message('updated field');
+          }
         }
       }
       elseif (!empty($group_name)) {
@@ -262,7 +316,6 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
         $source->log('import', $message, $arguments, WATCHDOG_ERROR);
       }
     }
-    return;
     // Set messages if we're done.
     if ($source->progressImporting() != FEEDS_BATCH_COMPLETE) {
       return;
@@ -270,74 +323,34 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     // Remove not included items if needed.
     // It depends on the implementation of the clean() method what will happen
     // to items that were no longer in the source.
-    $this->clean($state);
+    //$this->clean($state);
+
     $info = $this->entityInfo();
     $tokens = array(
       '@entity' => 'field',
       '@entities' => 'fields',
     );
+
+    $report_types = array(
+      'created' => 'Created',
+      'updated' => 'Updated',
+      'failed' => 'Failed Importing',
+      'deleted' => 'Deleted',
+    );
     $messages = array();
-    if ($state->created) {
-      $messages[] = array(
-       'message' => format_plural(
-          $state->created,
-          'Created @number @entity.',
-          'Created @number @entities.',
-          array('@number' => $state->created) + $tokens
-        ),
-      );
+    foreach($report_types as $report_type => $report_type_human_readable) {
+      if ($state->$report_type) {
+        $messages[] = array(
+          'message' => format_plural(
+            $state->$report_type,
+            $report_type_human_readable . ' @number @entity.',
+            $report_type_human_readable . ' @number @entities.',
+            array('@number' => $state->$report_type) + $tokens
+          ),
+        );
+      }
     }
-    if ($state->updated) {
-      $messages[] = array(
-       'message' => format_plural(
-          $state->updated,
-          'Updated @number @entity.',
-          'Updated @number @entities.',
-          array('@number' => $state->updated) + $tokens
-        ),
-      );
-    }
-    if ($state->unpublished) {
-      $messages[] = array(
-        'message' => format_plural(
-            $state->unpublished,
-            'Unpublished @number @entity.',
-            'Unpublished @number @entities.',
-            array('@number' => $state->unpublished) + $tokens
-        ),
-      );
-    }
-    if ($state->blocked) {
-      $messages[] = array(
-        'message' => format_plural(
-          $state->blocked,
-          'Blocked @number @entity.',
-          'Blocked @number @entities.',
-          array('@number' => $state->blocked) + $tokens
-        ),
-      );
-    }
-    if ($state->deleted) {
-      $messages[] = array(
-       'message' => format_plural(
-          $state->deleted,
-          'Removed @number @entity.',
-          'Removed @number @entities.',
-          array('@number' => $state->deleted) + $tokens
-        ),
-      );
-    }
-    if ($state->failed) {
-      $messages[] = array(
-       'message' => format_plural(
-          $state->failed,
-          'Failed importing @number @entity.',
-          'Failed importing @number @entities.',
-          array('@number' => $state->failed) + $tokens
-        ),
-        'level' => WATCHDOG_ERROR,
-      );
-    }
+
     if (empty($messages)) {
       $messages[] = array(
         'message' => t('There are no new @entities.', array('@entities' => strtolower($info['label plural']))),
@@ -463,27 +476,6 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
   }
 
   /**
-   * Converts a csv row array into an associative array based on the column headers.
-   *
-   * @param $field_data
-   *   The csv row array that contains the data.
-   * @param $headers
-   *   An associative array where the column name is the key, and the column number
-   *   is the value.
-   *
-   * @return array
-   *   An associative array where each column is the key and the data for the row
-   *   is the value.
-   */
-  protected function get_data($field_data, $headers) {
-    $final_field_data = array();
-    foreach ($headers as $property_name => $index) {
-      $final_field_data[$property_name] = trim($field_data[$index]);
-    }
-    return $final_field_data;
-  }
-
-  /**
    * Override parent::configDefaults().
    */
   public function configDefaults() {
@@ -492,98 +484,108 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       'bundle' => 'page',
       'update_existing_bases' => FEEDS_SKIP_EXISTING,
       'update_existing_instances' => FEEDS_SKIP_EXISTING,
+      'update_existing_groups' => FEEDS_SKIP_EXISTING,
+      'process_machine_names' => TRUE,
+      'prepend_field_names' => TRUE,
+      'prepend_group_names' => TRUE,
       'mappings' => array(
-        0 => array(
+        array(
           'source' => 'entity',
           'target' => 'entity',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        1 => array(
+        array(
           'source' => 'bundle',
           'target' => 'bundle',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        2 => array(
+        array(
           'source' => 'field_name',
           'target' => 'field_name',
           'unique' => 1,
           'language' => 'und',
         ),
-        3 => array(
+        array(
           'source' => 'type',
           'target' => 'type',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        4 => array(
+        array(
           'source' => 'label',
           'target' => 'label',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        5 => array(
+        array(
           'source' => 'cardinality',
           'target' => 'cardinality',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        6 => array(
+        array(
           'source' => 'allowed_values',
           'target' => 'allowed_values',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        7 => array(
+        array(
           'source' => 'description',
           'target' => 'description',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        8 => array(
+        array(
           'source' => 'default_value',
           'target' => 'default_value',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        9 => array(
+        array(
           'source' => 'required',
           'target' => 'required',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        10 => array(
+        array(
           'source' => 'widget_type',
           'target' => 'widget_type',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        11 => array(
+        array(
+          'source' => 'widget_weight',
+          'target' => 'widget_weight',
+          'unique' => FALSE,
+          'language' => 'und',
+        ),
+        array(
           'source' => 'settings_text_processing',
           'target' => 'settings_text_processing',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        12 => array(
+        array(
           'source' => 'settings_prefix',
           'target' => 'settings_prefix',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        13 => array(
+        array(
           'source' => 'settings_suffix',
           'target' => 'settings_suffix',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        14 => array(
+        array(
           'source' => 'field_group_name',
           'target' => 'field_group_name',
           'unique' => FALSE,
           'language' => 'und',
         ),
-        15 => array(
+        array(
           'source' => 'field_group_parent',
           'target' => 'field_group_parent',
           'unique' => FALSE,
@@ -671,6 +673,49 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       '#default_value' => $this->config['update_existing_instances'],
     );
 
+    $form['update_existing_groups'] = array(
+      '#type' => 'radios',
+      '#title' => t('Update existing field groups'),
+      '#description' =>
+        t('Existing field groups will be determined using mappings that are a "unique target".'),
+      '#options' => array(
+        FEEDS_SKIP_EXISTING => t('Do not update existing field groups'),
+        FEEDS_UPDATE_EXISTING => t('Update existing field groups'),
+      ),
+      '#default_value' => $this->config['update_existing_groups'],
+    );
+
+    $form['process_machine_names'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Process field names to fit Drupal conventions.'),
+      '#description' => t('If needed, this will convert fields to lowercase and convert spaces and symbols to underscores.'),
+      '#default_value' => $this->config['process_machine_names'],
+    );
+
+    $form['prepend_field_names'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Ensure field names are prepended with \'field_\'.'),
+      '#description' => t('This is a Drupal convention. If checked, this will prepend field machine names with \'field_\' if needed.'),
+      '#default_value' => $this->config['prepend_field_names'],
+      '#states' => array(
+        'visible' => array(
+          ':input[name="process_machine_names"]' => array('checked' => TRUE),
+        ),
+      ),
+    );
+
+    $form['prepend_group_names'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Ensure group names are prepended with \'group_\'.'),
+      '#description' => t('This is a field_groups convention. If checked, this will prepend group machine names with \'group_\' if needed.'),
+      '#default_value' => $this->config['prepend_field_names'],
+      '#states' => array(
+        'visible' => array(
+          ':input[name="process_machine_names"]' => array('checked' => TRUE),
+        ),
+      ),
+    );
+
     $form['update_non_existent']['#options']['delete'] = t('Delete non-existent field instances, and delete field base if not used on other entities');
 
     return $form;
@@ -682,7 +727,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
   public function getMappingTargets() {
     $targets = array();
     $targets['field_name'] = array(
-      'name' => t('Field Machine Name'),
+      'name' => t('Machine Name'),
       'description' => t('The unique machine name of the field.'),
       'optional_unique' => TRUE,
     );
@@ -718,6 +763,10 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     $targets['widget_type'] = array(
       'name' => t('Widget Type'),
       'description' => t('If not empty, this will select a widget type other than the default for the type.'),
+    );
+    $targets['widget_weight'] = array(
+      'name' => t('Widget Weight'),
+      'description' => t('The weight of the widget.'),
     );
     $targets['cardinality'] = array(
       'name' => t('Cardinality'),
@@ -796,7 +845,10 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     //do nothing here
   }
 
-  protected function processMachineName($field_name) {
-    return str_replace(' ', '_', strtolower(trim($field_name)));
+  protected function processMachineName($name, $prepend) {
+    $name = str_replace(' ', '_', strtolower(trim($name)));
+    if ($prepend && substr($name, 0, strlen($prepend) != $prepend)) {
+      $name = $prepend . $name;
+    }
   }
 }
