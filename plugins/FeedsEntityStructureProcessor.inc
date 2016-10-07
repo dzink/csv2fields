@@ -83,7 +83,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       $field_base['settings']['allowed_values_function'] = '';
     }
 
-    drupal_alter('feeds_entity_structure_field_base', $this, $source, $parser_result, $field_base);
+    drupal_alter('csv2fields_field_base', $this, $source, $parser_result, $field_base);
     return $field_base;
   }
 
@@ -105,17 +105,18 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
    * @return bool|mixed
    *   Either returns the new entity instance or FALSE if there were errors.
    */
-  protected function updateFieldInstance(FeedsSource $source, FeedsParserResult $parser_result, &$field_instance) {
+  protected function updateFieldInstance(FeedsSource $source, FeedsParserResult $parser_result, &$field_instance, $parent_group) {
     $field_instance = array_merge($field_instance, array(
       'label' => $this->getSourceValueFromTarget($source, $parser_result, 'label'),
       'default_value' => $this->getSourceValueFromTarget($source, $parser_result, 'default_value'),
       'description' => $this->getSourceValueFromTarget($source, $parser_result, 'description'),
+      'parent_name' => $parent_group,
       'required' => $this->parseRequired($this->getSourceValueFromTarget($source, $parser_result, 'required')),
     ));
     $field_instance_settings = array(
       'prefix' => $this->getSourceValueFromTarget($source, $parser_result, 'settings_prefix'),
       'suffix' => $this->getSourceValueFromTarget($source, $parser_result, 'settings_suffix'),
-      'text_processing' => $this->getSourceValueFromTarget($source, $parser_result, 'text_processing'),
+      'text_processing' => $this->getSourceValueFromTarget($source, $parser_result, 'settings_text_processing'),
     );
     $field_instance_widget = array(
       'type' => $this->getSourceValueFromTarget($source, $parser_result, 'widget_type'),
@@ -132,14 +133,13 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       return $property != '';
     });
     if ($field_instance_settings) {
-      array_replace($field_instance['settings'], $field_instance_settings);
+      $field_instance['settings'] = array_merge($field_instance['settings'], $field_instance_settings);
     }
     if ($field_instance_widget) {
-      dsm($field_instance_widget);
-      array_replace($field_instance['widget'], $field_instance_widget);
+      $field_instance['widget'] = array_merge($field_instance['widget'], $field_instance_widget);
     }
 
-    drupal_alter('feeds_entity_structure_field_instance', $this, $source, $parser_result, $field_instance);
+    drupal_alter('csv2fields_field_instance', $this, $source, $parser_result, $field_instance);
     return $field_instance;
   }
 
@@ -169,6 +169,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     $group->weight = ($weight) ? $weight : $group->weight;
     $group->format_settings['instance_settings']['description'] = ($description) ?
         $description : $group->format_settings['instance_settings']['description'];
+    drupal_alter('csv2fields_field_group', $this, $source, $parser_result, $group);
   }
 
   protected function makeFieldBaseStub(FeedsSource $source, FeedsParserResult $parser_result, $field_name, $field_type) {
@@ -221,7 +222,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
 
   protected function shouldImportFieldBase($field_base, $field_type) {
     $skip_new = $this->config['insert_new'] == FEEDS_SKIP_NEW;
-    $skip_existing_base = $this->config['update_existing_base'];
+    $skip_existing_base = $this->config['update_existing_bases'];
 
     if ($skip_new && empty($field_base)) {
       return FALSE;
@@ -287,16 +288,21 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
         // We need all of these values before we can figure out what to do with
         // a row.
         $field_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_name');
-        $group_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_group_name');
+        if (module_exists('field_group')) {
+          $group_name = $this->getSourceValueFromTarget($source, $parser_result, 'field_group_name');
+        }
         if (!empty($field_name) || !empty($group_name)) {
           $field_name = $this->processMachineName($field_name, 'field_');
-          $group_name = $this->processMachineName($group_name, 'group_');
           $entity_name = $this->getSourceValueFromTarget($source, $parser_result, 'entity');
           $entity_name = !empty($entity_name) ? $entity_name : $this->entityType();
           $bundle_name = $this->getSourceValueFromTarget($source, $parser_result, 'bundle');
           $bundle_name = !empty($bundle_name) ? $bundle_name : $this->bundle();
           $field_type = $this->getSourceValueFromTarget($source, $parser_result, 'type');
-          $parent_group = $this->getSourceValueFromTarget($source, $parser_result, 'field_group_parent');
+          if (module_exists('field_group')) {
+            $parent_group = $this->getSourceValueFromTarget($source, $parser_result, 'field_group_parent');
+            $group_name = $this->processMachineName($group_name, 'group_');
+            $parent_group = $this->processMachineName($parent_group, 'group_');
+          }
         }
         else {
           // If neither group name or field name are set, not much to do
@@ -311,52 +317,54 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
           if ($this->shouldImportFieldBase($field_base, $field_type)) {
             if (empty($field_base)) {
               $field_base = self::makeFieldBaseStub($source, $parser_result, $field_name, $field_type);
-              $this->updateFieldBase($source, $parser_result, $field_base);
+              $this->updateFieldBase($source, $parser_result, $field_base, $parent_group);
               field_create_field($field_base);
-              $state->created_base++;
+              $state->created++;
             }
             elseif (!empty($field_base)) {
-              $this->updateFieldBase($source, $parser_result, $field_base);
+              $this->updateFieldBase($source, $parser_result, $field_base, $parent_group);
               field_update_field($field_base);
-              $state->updated_base++;
+              $state->updated++;
             }
           }
 
           $field_instance = field_info_instance($entity_name, $field_name, $bundle_name);
-          if ($this->shouldImportFieldInstance($field_instance)) {
+          if ($field_base && $this->shouldImportFieldInstance($field_instance)) {
             if (empty($field_instance)) {
               $field_instance = self::makeFieldInstanceStub($source, $parser_result, $field_name, $entity_name, $bundle_name);
               $this->updateFieldInstance($source, $parser_result, $field_instance);
               field_create_instance($field_instance);
-              $state->created_base++;
+              $state->created++;
             }
             else {
-              //dsm($field_instance);
               $this->updateFieldInstance($source, $parser_result, $field_instance);
               field_update_instance($field_instance);
-              $state->updated_instance++;
+              $state->updated++;
             }
-            if ($parent_group) {
-              self::addElementToGroup($field_name, $parent_group, $entity_name, $bundle_name);
+            if (module_exists('field_group')) {
+              if ($parent_group) {
+                self::addElementToGroup($field_name, $parent_group, $entity_name, $bundle_name);
+              }
             }
           }
         }
-        elseif (!empty($group_name)) {
+        elseif (!empty($group_name) && module_exists('field_group')) {
           $group = field_group_load_field_group($group_name, $entity_name, $bundle_name, 'form');
 
-          dsm($group);
           if ($this->shouldImportFieldGroup($group)) {
             if (empty($group)) {
               $group = self::makeFieldGroupStub($source, $parser_result, $group_name, $entity_name, $bundle_name);
               $this->updateFieldGroup($source, $parser_result, $group);
               field_group_group_save($group);
-              $state->created_group++;
+              $state->created++;
             }
             else {
               $this->updateFieldGroup($source, $parser_result, $group);
               field_group_group_save($group);
-              $state->updated_group++;
+              $state->updated++;
             }
+            ctools_include('export');
+            ctools_export_crud_enable('field_group', $group->identifier);
             if ($parent_group) {
               self::addElementToGroup($group_name, $parent_group, $entity_name, $bundle_name);
             }
@@ -375,22 +383,14 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       return;
     }
 
-    dsm($state);
-
     $report_types = array(
-      'created_base' => 'Created @number base field(s)',
-      'created_instance' => 'Created @number field instance(s)',
-      'created_group' => 'Created @number field group(s)',
-      'updated_base' => 'Updated @number base field(s)',
-      'updated_instance' => 'Updated @number field instance(s)',
-      'updated_group' => 'Updated @number field group(s)',
-      'deleted_base' => 'Deleted @number base field(s)',
-      'deleted_instance' => 'Deleted @number field instance(s)',
-      'deleted_group' => 'Deleted @number field group(s)',
+      'created' => 'Created @number base field(s), field instance(s), or field group(s)',
+      'updated' => 'Updated @number base field(s), field instance(s), or field group(s)',
+      'deleted' => 'Deleted @number base field(s), field instance(s), or field group(s)',
       'failed' => 'Failed Importing @number rows. Please check your error logs.',
     );
     $messages = array();
-    foreach($report_types as $report_type => $report_type_human_readable) {
+    foreach ($report_types as $report_type => $report_type_human_readable) {
       if ($state->$report_type) {
         $messages[] = array(
           'message' => t($report_type_human_readable, array(
@@ -413,7 +413,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
 
   protected function getSourceValueFromTarget(FeedsSource $source, FeedsParserResult $parser_result, $target) {
     $mappings = $this->getMappings();
-    foreach($mappings as $mid => $mapping) {
+    foreach ($mappings as $mid => $mapping) {
       if ($mapping['target'] == $target) {
         $item = $parser_result->currentItem();
         $element_key = $mapping['source'];
@@ -436,11 +436,13 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
    * @param string $bundle_name
    *   The name of the bundle.
    */
-  static protected function addElementToGroup($element_name, $field_group, $entity_type, $bundle_name) {
+  static protected function addElementToGroup($element_name, $field_group, $entity_name, $bundle_name) {
     $group = field_group_load_field_group($field_group, $entity_name, $bundle_name, 'form');
-    if (!empty($group) && in_array($element_name, $group->children)) {
+    if (!empty($group) && !in_array($element_name, $group->children)) {
       $group->children[] = $element_name;
       field_group_group_save($group);
+      ctools_include('export');
+      ctools_export_crud_enable('field_group', $group->identifier);
     }
   }
 
@@ -565,7 +567,6 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
 
   public function configForm(&$form_state) {
     //drupal_page_is_cacheable(FALSE);
-
     $form = parent::configForm($form_state);
     $entities = entity_get_info(NULL);
 
@@ -582,6 +583,11 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     if (!sizeof($bundle_options)) {
       $bundle_options[$this->entityType()] = $entities[$this->entityType()]['label'];
     }
+
+    // Unset these two because they don't really apply.
+    unset($form['update_non_existent']);
+    unset($form['skip_hash_check']);
+
     $form_state['rebuild'] = TRUE;
     $form['entity'] = array(
       '#type' => 'select',
@@ -602,7 +608,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
 
     $form['bundle'] = array(
       '#type' => 'select',
-      '#title' => t('Default @entity type', array(
+      '#title' => t('Default @entity bundle', array(
         '@entity' => $entities[$this->entityType()]['label'],
       )),
       '#description' => t('Select the default entity to add fields to. This can be overridden by mapping to an entity.'),
@@ -640,18 +646,19 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       ),
       '#default_value' => $this->config['update_existing_instances'],
     );
-
-    $form['update_existing_groups'] = array(
-      '#type' => 'radios',
-      '#title' => t('Update existing field groups'),
-      '#description' =>
-        t('Existing field groups will be determined using mappings that are a "unique target".'),
-      '#options' => array(
-        FEEDS_SKIP_EXISTING => t('Do not update existing field groups'),
-        FEEDS_UPDATE_EXISTING => t('Update existing field groups'),
-      ),
-      '#default_value' => $this->config['update_existing_groups'],
-    );
+    if (module_exists('field_group')) {
+      $form['update_existing_groups'] = array(
+        '#type' => 'radios',
+        '#title' => t('Update existing field groups'),
+        '#description' =>
+          t('Existing field groups will be determined using mappings that are a "unique target".'),
+        '#options' => array(
+          FEEDS_SKIP_EXISTING => t('Do not update existing field groups'),
+          FEEDS_UPDATE_EXISTING => t('Update existing field groups'),
+        ),
+        '#default_value' => $this->config['update_existing_groups'],
+      );
+    }
 
     $form['process_machine_names'] = array(
       '#type' => 'checkbox',
@@ -671,18 +678,19 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
         ),
       ),
     );
-
-    $form['prepend_group_names'] = array(
-      '#type' => 'checkbox',
-      '#title' => t('Ensure group names are prepended with \'group_\'.'),
-      '#description' => t('This is a field_groups convention. If checked, this will prepend group machine names with \'group_\' if needed.'),
-      '#default_value' => $this->config['prepend_field_names'],
-      '#states' => array(
-        'visible' => array(
-          ':input[name="process_machine_names"]' => array('checked' => TRUE),
+    if (module_exists('field_group')) {
+      $form['prepend_group_names'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Ensure group names are prepended with \'group_\'.'),
+        '#description' => t('This is a field_groups convention. If checked, this will prepend group machine names with \'group_\' if needed.'),
+        '#default_value' => $this->config['prepend_field_names'],
+        '#states' => array(
+          'visible' => array(
+            ':input[name="process_machine_names"]' => array('checked' => TRUE),
+          ),
         ),
-      ),
-    );
+      );
+    }
 
     $form['update_non_existent']['#options']['delete'] = t('Delete non-existent field instances, and delete field base if not used on other entities');
 
@@ -702,7 +710,6 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
     $targets['label'] = array(
       'name' => t('Label'),
       'description' => t('The display label.'),
-      'optional_unique' => TRUE,
     );
     $targets['type'] = array(
       'name' => t('Field Type'),
@@ -767,14 +774,7 @@ class FeedsEntityStructureProcessor extends FeedsProcessor {
       );
     }
 
-    // Add hooks, but do not actually
-    $original_targets = $targets;
     $this->getHookTargets($targets);
-    foreach (array_keys($targets) as $target_id) {
-      if (!isset($original_targets[$target_id])) {
-        unset($targets[$target_id]);
-      }
-    }
     return $targets;
   }
 
